@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 
 const MAX_UPLOAD_SIZE = 200 * 1024 * 1024;
+const API_URL = import.meta.env.VITE_API_URL;
 
 const parseFile = (file, setError, setSuccess, onParsed) => {
   if (file.size > MAX_UPLOAD_SIZE) {
@@ -12,7 +13,7 @@ const parseFile = (file, setError, setSuccess, onParsed) => {
   const formData = new FormData();
   formData.append('file', file);
 
-  fetch('/api/upload', {
+  fetch(`${API_URL}/api/upload`, {
     method: 'POST',
     body: formData
   })
