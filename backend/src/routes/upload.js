@@ -28,7 +28,23 @@ const parseSize = (value, fallback) => {
 
 const fileSizeLimit = parseSize(process.env.MAX_UPLOAD_SIZE, 200 * 1024 * 1024);
 const upload = multer({ dest: os.tmpdir(), limits: { fileSize: fileSizeLimit } });
-const requiredHeaders = ['date', 'description', 'amount'];
+const dateFields = ['date', 'transaction date', 'transaction_date'];
+const descriptionFields = [
+  'description',
+  'details',
+  'merchant',
+  'payee',
+  'narrative'
+];
+const amountFields = [
+  'amount',
+  'value',
+  'transaction amount',
+  'debit',
+  'credit',
+  'income',
+  'expenditure'
+];
 const headerAliases = {
   date: 'date',
   'transaction date': 'date',
@@ -78,23 +94,28 @@ const parseCsvFile = (filePath) =>
     fs.createReadStream(filePath)
       .pipe(parser)
       .on('headers', (headers) => {
-        const lower = headers.map((h) => h.toLowerCase().trim());
-        const missing = requiredHeaders.filter((col) => !lower.includes(col));
-        if (missing.length) {
-          if (lower.some((header) => Object.keys(summaryColumns).includes(header))) {
-            useSummaryMode = true;
-          } else {
-            reject(new Error(`CSV missing required columns: ${missing.join(', ')}. Received headers: ${headers.join(', ')}`));
-            return;
-          }
-        }
-        headersValidated = true;
-      })
+         headersValidated = true;
+         console.log('CSV Headers:', headers);
+        })
       .on('data', (row) => {
         rowIndex += 1;
-        const date = (row.date || '').trim();
-        const description = (row.description || '').trim();
-        const amountRaw = (row.amount || '').trim();
+        const findValue = (fields) => {
+           for (const field of fields) {
+             if (row[field] !== undefined && row[field] !== '') {
+              return String(row[field]).trim();
+            }
+          }
+          return '';
+        };
+        const date = findValue(dateFields);
+        const description = findValue(descriptionFields);
+        let amount = NaN;
+        for (const field of amountFields) {
+          if (row[field] !== undefined && row[field] !== '') {
+            amount = Number(String(row[field]).replace(/,/g, ''));
+            if (!Number.isNaN(amount)) break;
+          }
+        }
         const debitRaw = (row.debit || '').trim();
         const creditRaw = (row.credit || '').trim();
         const incomeRaw = (row.income || '').trim();
@@ -138,20 +159,14 @@ const parseCsvFile = (filePath) =>
           }
         }
 
-        if (!date) {
-          reject(new Error(`Row ${rowIndex}: Missing date value.`));
-          return;
+        
+        if (!Number.isNaN(amount)) {
+          transactions.push({
+            date: date || `Row ${rowIndex}`,
+            description: description || 'Imported Transaction',
+            amount
+          });
         }
-        if (!description) {
-          reject(new Error(`Row ${rowIndex}: Missing description value.`));
-          return;
-        }
-        if (Number.isNaN(amount)) {
-          reject(new Error(`Row ${rowIndex}: Invalid amount '${amountRaw || debitRaw || creditRaw || incomeRaw || expenditureRaw}'.`));
-          return;
-        }
-
-        transactions.push({ date, description, amount });
       })
       .on('end', () => {
         if (!headersValidated) {
