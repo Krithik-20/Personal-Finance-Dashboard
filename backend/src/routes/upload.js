@@ -9,11 +9,19 @@ const router = express.Router();
 
 const parseSize = (value, fallback) => {
   if (!value) return fallback;
+
   const normalized = String(value).trim().toLowerCase();
-  if (/^\d+$/.test(normalized)) return Number(normalized);
+
+  if (/^\d+$/.test(normalized)) {
+    return Number(normalized);
+  }
+
   const match = normalized.match(/^(\d+)(kb|mb|gb)$/);
+
   if (!match) return fallback;
+
   const number = Number(match[1]);
+
   switch (match[2]) {
     case 'kb':
       return number * 1024;
@@ -26,9 +34,24 @@ const parseSize = (value, fallback) => {
   }
 };
 
-const fileSizeLimit = parseSize(process.env.MAX_UPLOAD_SIZE, 200 * 1024 * 1024);
-const upload = multer({ dest: os.tmpdir(), limits: { fileSize: fileSizeLimit } });
-const dateFields = ['date', 'transaction date', 'transaction_date'];
+const fileSizeLimit = parseSize(
+  process.env.MAX_UPLOAD_SIZE,
+  200 * 1024 * 1024
+);
+
+const upload = multer({
+  dest: os.tmpdir(),
+  limits: {
+    fileSize: fileSizeLimit
+  }
+});
+
+const dateFields = [
+  'date',
+  'transaction date',
+  'transaction_date'
+];
+
 const descriptionFields = [
   'description',
   'details',
@@ -36,45 +59,34 @@ const descriptionFields = [
   'payee',
   'narrative'
 ];
+
 const amountFields = [
   'amount',
   'value',
   'transaction amount',
+  'transaction_amount',
   'debit',
   'credit',
   'income',
   'expenditure'
 ];
+
 const headerAliases = {
   date: 'date',
   'transaction date': 'date',
   'transaction_date': 'date',
-  'transactiondate': 'date',
+  transactiondate: 'date',
+
   description: 'description',
   details: 'description',
   merchant: 'description',
   payee: 'description',
   narrative: 'description',
+
   amount: 'amount',
   value: 'amount',
   'transaction amount': 'amount',
-  'transaction_amount': 'amount',
-  debit: 'amount',
-  credit: 'amount'
-};
-const summaryColumns = {
-  mthly_hh_income: { description: 'Monthly Household Income', sign: 1 },
-  mthly_hh_expense: { description: 'Monthly Household Expense', sign: -1 },
-  emi_or_rent_amt: { description: 'EMI / Rent', sign: -1 },
-  annual_hh_income: { description: 'Annual Household Income', sign: 1 },
-  highest_qualified_member: { description: 'Highest Qualified Member', sign: 0 },
-  no_of_earning_members: { description: 'Number of Earning Members', sign: 0 }
-};
-
-const parseNumeric = (value) => {
-  if (value === undefined || value === null) return NaN;
-  const normalized = String(value).trim().replace(/,/g, '');
-  return Number(normalized);
+  transaction_amount: 'amount'
 };
 
 const parseCsvFile = (filePath) =>
@@ -82,11 +94,10 @@ const parseCsvFile = (filePath) =>
     const transactions = [];
     let headersValidated = false;
     let rowIndex = 0;
-    let useSummaryMode = false;
 
     const parser = csvParser({
       mapHeaders: ({ header }) => {
-        const normalized = header.toLowerCase().trim();
+        const normalized = String(header).toLowerCase().trim();
         return headerAliases[normalized] || normalized;
       }
     });
@@ -94,89 +105,86 @@ const parseCsvFile = (filePath) =>
     fs.createReadStream(filePath)
       .pipe(parser)
       .on('headers', (headers) => {
-         headersValidated = true;
-         console.log('CSV Headers:', headers);
-        })
+        headersValidated = true;
+        console.log('CSV Headers:', headers);
+      })
       .on('data', (row) => {
-        rowIndex += 1;
-        const findValue = (fields) => {
-           for (const field of fields) {
-             if (row[field] !== undefined && row[field] !== '') {
+        rowIndex++;
+
+        const getValue = (fields) => {
+          for (const field of fields) {
+            if (
+              row[field] !== undefined &&
+              row[field] !== null &&
+              String(row[field]).trim() !== ''
+            ) {
               return String(row[field]).trim();
             }
           }
+
           return '';
         };
-        const date = findValue(dateFields);
-        const description = findValue(descriptionFields);
+
+        const date = getValue(dateFields);
+        const description = getValue(descriptionFields);
+
         let amount = NaN;
+
         for (const field of amountFields) {
-          if (row[field] !== undefined && row[field] !== '') {
-            amount = Number(String(row[field]).replace(/,/g, ''));
-            if (!Number.isNaN(amount)) break;
+          if (
+            row[field] !== undefined &&
+            row[field] !== null &&
+            String(row[field]).trim() !== ''
+          ) {
+            const parsed = Number(
+              String(row[field]).replace(/,/g, '')
+            );
+
+            if (!Number.isNaN(parsed)) {
+              amount = parsed;
+              break;
+            }
           }
         }
-        const debitRaw = (row.debit || '').trim();
-        const creditRaw = (row.credit || '').trim();
-        const incomeRaw = (row.income || '').trim();
-        const expenditureRaw = (row.expenditure || '').trim();
 
-        if (!date && !description && !amountRaw && !debitRaw && !creditRaw && !incomeRaw && !expenditureRaw && !Object.keys(row).some((key) => summaryColumns[key.toLowerCase()])) {
+        if (Number.isNaN(amount)) {
+          for (const key of Object.keys(row)) {
+            const parsed = Number(
+              String(row[key]).replace(/,/g, '')
+            );
+
+            if (!Number.isNaN(parsed)) {
+              amount = parsed;
+              break;
+            }
+          }
+        }
+
+        if (Number.isNaN(amount)) {
           return;
         }
 
-        if (useSummaryMode) {
-          const summaryDate = date || `Summary Row ${rowIndex}`;
-          let addedSummary = false;
-          for (const key of Object.keys(row)) {
-            const normalized = key.toLowerCase().trim();
-            const settings = summaryColumns[normalized];
-            if (!settings) continue;
-            const value = parseNumeric(row[key]);
-            if (Number.isNaN(value) || settings.sign === 0) continue;
-            transactions.push({
-              date: summaryDate,
-              description: settings.description,
-              amount: value * settings.sign
-            });
-            addedSummary = true;
-          }
-          if (addedSummary) {
-            return;
-          }
-        }
-
-        let amount = Number(amountRaw);
-        if (Number.isNaN(amount) || amountRaw === '') {
-          if (debitRaw !== '') {
-            amount = -Math.abs(Number(debitRaw));
-          } else if (creditRaw !== '') {
-            amount = Number(creditRaw);
-          } else if (incomeRaw !== '' || expenditureRaw !== '') {
-            const income = Number(incomeRaw) || 0;
-            const expenditure = Number(expenditureRaw) || 0;
-            amount = income - expenditure;
-          }
-        }
-
-        
-        if (!Number.isNaN(amount)) {
-          transactions.push({
-            date: date || `Row ${rowIndex}`,
-            description: description || 'Imported Transaction',
-            amount
-          });
-        }
+        transactions.push({
+          date: date || `Row ${rowIndex}`,
+          description: description || 'Imported Transaction',
+          amount
+        });
       })
       .on('end', () => {
         if (!headersValidated) {
-          reject(new Error('CSV file appears malformed or empty.'));
+          reject(
+            new Error('CSV file appears malformed or empty.')
+          );
           return;
         }
+
         if (!transactions.length) {
-          reject(new Error('CSV is empty or contains no valid transactions.'));
+          reject(
+            new Error('CSV contains no usable numeric data.')
+          );
           return;
         }
+
         resolve(transactions);
       })
       .on('error', (error) => reject(error));
@@ -185,28 +193,38 @@ const parseCsvFile = (filePath) =>
 router.post('/', upload.single('file'), async (req, res, next) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded. Please choose a CSV file.' });
+      return res.status(400).json({
+        error: 'No file uploaded. Please choose a CSV file.'
+      });
     }
 
     const filePath = path.resolve(req.file.path);
+
     const stats = fs.statSync(filePath);
+
     if (stats.size === 0) {
-      return res.status(400).json({ error: 'Uploaded file is empty.' });
+      return res.status(400).json({
+        error: 'Uploaded file is empty.'
+      });
     }
 
     const transactions = await parseCsvFile(filePath);
+
     const unique = [];
     const seen = new Set();
 
     for (const transaction of transactions) {
       const key = `${transaction.date}|${transaction.description}|${transaction.amount}`;
+
       if (!seen.has(key)) {
         seen.add(key);
         unique.push(transaction);
       }
     }
 
-    res.json({ transactions: unique });
+    res.json({
+      transactions: unique
+    });
   } catch (error) {
     next(error);
   }
@@ -215,9 +233,12 @@ router.post('/', upload.single('file'), async (req, res, next) => {
 router.use((error, req, res, next) => {
   if (error.code === 'LIMIT_FILE_SIZE') {
     return res.status(413).json({
-      error: `Uploaded file is too large. Maximum allowed size is ${Math.round(fileSizeLimit / 1024 / 1024)} MB.`
+      error: `Uploaded file is too large. Maximum allowed size is ${Math.round(
+        fileSizeLimit / 1024 / 1024
+      )} MB.`
     });
   }
+
   next(error);
 });
 
